@@ -552,7 +552,11 @@ class VertexBackend(VLMBackend):
         # Initialize the model
         self.client = genai.Client(
             vertexai=True,
+<<<<<<< HEAD
+            project='pokeagent-010',
+=======
             project=vertex_id,
+>>>>>>> 3f117c99711e51172da4e087fa02a8f9398ed33b
             location='us-central1',
         )
         self.genai = genai
@@ -599,6 +603,7 @@ class VertexBackend(VLMBackend):
                     result = self.get_text_query(text, module_name)
                     return result
             result = response.text
+<<<<<<< HEAD
 
             if not isinstance(result, str):
                 result = str(result or "")
@@ -616,9 +621,29 @@ class VertexBackend(VLMBackend):
             result_preview = result[:1000] + "..." if len(result) > 1000 else result
             logger.info(f"[{module_name}] RESPONSE: {result_preview}")
             logger.info(f"[{module_name}] ---")
+=======
+            # Log the interaction
+            duration = time.time() - start_time
+            log_llm_interaction(
+                interaction_type=f"local_{module_name}",
+                prompt=text,
+                response=result,
+                duration=duration,
+                metadata={"model": self.model_name, "backend": "local", "has_image": True},
+                model_info={"model": self.model_name, "backend": "local"}
+            )
+            
+            # Log the response
+            result_preview = result[:1000] + "..." if len(result) > 1000 else result
+            logger.info(f"[{module_name}] RESPONSE: {result_preview}")
+            logger.info(f"[{module_name}] ---")
+            print(f'RESPONSE: {result}')
+            
+>>>>>>> 3f117c99711e51172da4e087fa02a8f9398ed33b
             return result
 
         except Exception as e:
+<<<<<<< HEAD
             duration = time.time() - start
             log_llm_error(
                 interaction_type=f"vertex_{module_name}",
@@ -629,12 +654,28 @@ class VertexBackend(VLMBackend):
             logger.error(f"Error in Gemini image query (vertex): {e}")
             # text-only fallback already handled inside get_text_query
             return "I encountered an error processing the image. I'll proceed with a basic action: press 'A' to continue."
+=======
+            print(f"Error in Gemini image query: {e}")
+            logger.error(f"Error in Gemini image query: {e}")
+            # Try text-only fallback for any Gemini error
+            try:
+                logger.info(f"[{module_name}] Attempting text-only fallback due to error: {e}")
+                return self.get_text_query(text, module_name)
+            except Exception as fallback_error:
+                logger.error(f"[{module_name}] Text-only fallback also failed: {fallback_error}")
+                raise e
+>>>>>>> 3f117c99711e51172da4e087fa02a8f9398ed33b
     
     def get_text_query(self, text: str, module_name: str = "Unknown") -> str:
         """Process a text-only prompt using Gemini API (Vertex) and log to our llm_logger."""
         start = time.time()
         try:
+<<<<<<< HEAD
             # Log to normal python logger (kept from your version)
+=======
+            start_time = time.time()
+            # Log the prompt
+>>>>>>> 3f117c99711e51172da4e087fa02a8f9398ed33b
             prompt_preview = text[:2000] + "..." if len(text) > 2000 else text
             logger.info(f"[{module_name}] GEMINI VLM TEXT QUERY (vertex):")
             logger.info(f"[{module_name}] PROMPT: {prompt_preview}")
@@ -646,6 +687,7 @@ class VertexBackend(VLMBackend):
             if hasattr(response, 'candidates') and response.candidates:
                 candidate = response.candidates[0]
                 if hasattr(candidate, 'finish_reason') and candidate.finish_reason == 12:
+<<<<<<< HEAD
                     logger.warning(
                         f"[{module_name}] Gemini safety filter triggered (finish_reason=12). Returning default response."
                     )
@@ -676,6 +718,25 @@ class VertexBackend(VLMBackend):
             )
 
             # Also keep python logger
+=======
+                    logger.warning(f"[{module_name}] Gemini safety filter triggered (finish_reason=12). Returning default response.")
+                    return "I cannot analyze this content due to safety restrictions. I'll proceed with a basic action: press 'A' to continue."
+            
+            result = response.text
+            
+            # Log the interaction
+            duration = time.time() - start_time
+            log_llm_interaction(
+                interaction_type=f"local_{module_name}",
+                prompt=text,
+                response=result,
+                duration=duration,
+                metadata={"model": self.model_name, "backend": "local", "has_image": False},
+                model_info={"model": self.model_name, "backend": "local"}
+            )
+            
+            # Log the response
+>>>>>>> 3f117c99711e51172da4e087fa02a8f9398ed33b
             result_preview = result[:1000] + "..." if len(result) > 1000 else result
             logger.info(f"[{module_name}] RESPONSE: {result_preview}")
             logger.info(f"[{module_name}] ---")
@@ -683,6 +744,7 @@ class VertexBackend(VLMBackend):
             return result
 
         except Exception as e:
+<<<<<<< HEAD
             duration = time.time() - start
             # ✅ log to our JSON logger as error too
             log_llm_error(
@@ -696,12 +758,12 @@ class VertexBackend(VLMBackend):
                 },
             )
             logger.error(f"Error in Gemini text query (vertex): {e}")
-            return "I encountered an error processing the request. I'll proceed with a basic action: press 'A' to continue."
-                    "model": self.model_name,
-                    "duration": duration,
-                },
-            )
-            logger.error(f"Error in Gemini text query (vertex): {e}")
+=======
+            print(f"Error in Gemini text query: {e}")
+            logger.error(f"Error in Gemini text query: {e}")
+            # Return a safe default response
+            logger.warning(f"[{module_name}] Returning default response due to error: {e}")
+>>>>>>> 3f117c99711e51172da4e087fa02a8f9398ed33b
             return "I encountered an error processing the request. I'll proceed with a basic action: press 'A' to continue."
 
 
