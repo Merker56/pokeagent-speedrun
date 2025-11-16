@@ -326,6 +326,7 @@ class LocalHuggingFaceBackend(VLMBackend):
     def _generate_response(self, inputs: Dict[str, Any], text: str, module_name: str) -> str:
         """Generate response using the local model"""
         try:
+            start_time = time.time()
             
             # Log the prompt
             prompt_preview = text[:2000] + "..." if len(text) > 2000 else text
@@ -365,6 +366,17 @@ class LocalHuggingFaceBackend(VLMBackend):
                     result = generated_text.split(text)[-1].strip()
                 else:
                     result = generated_text.strip()
+            
+            # Log the interaction
+            duration = time.time() - start_time
+            log_llm_interaction(
+                interaction_type=f"local_{module_name}",
+                prompt=text,
+                response=result,
+                duration=duration,
+                metadata={"model": self.model_name, "backend": "local", "has_image": "images" in inputs},
+                model_info={"model": self.model_name, "backend": "local"}
+            )
             
             # Log the response
             result_preview = result[:1000] + "..." if len(result) > 1000 else result
@@ -523,24 +535,29 @@ class LegacyOllamaBackend(VLMBackend):
 
 class VertexBackend(VLMBackend):
     """Google Gemini API with Vertex backend"""
-    
+
     def __init__(self, model_name: str, **kwargs):
         try:
             from google import genai
         except ImportError:
             raise ImportError("Google Generative AI package not found. Install with: pip install google-generativeai")
-        
+
         self.model_name = model_name
-        
+
+        # Get vertex_id from kwargs, raise error if not provided
+        vertex_id = kwargs.get('vertex_id')
+        if not vertex_id:
+            raise ValueError("vertex_id is required for VertexBackend. Pass it via --vertex-id parameter.")
+
         # Initialize the model
         self.client = genai.Client(
             vertexai=True,
-            project='pokeagent-010',
+            project=vertex_id,
             location='us-central1',
         )
         self.genai = genai
-        
-        logger.info(f"Gemini backend initialized with model: {model_name}")
+
+        logger.info(f"Vertex backend initialized with model: {model_name}, project: {vertex_id}")
     
     def _prepare_image(self, img: Union[Image.Image, np.ndarray]) -> Image.Image:
         """Prepare image for Gemini API"""
@@ -564,6 +581,7 @@ class VertexBackend(VLMBackend):
     def get_query(self, img: Union[Image.Image, np.ndarray], text: str, module_name: str = "Unknown") -> str:
         start = time.time()
         try:
+            start_time = time.time()
             image = self._prepare_image(img)
             content_parts = [text, image]
 
@@ -673,6 +691,12 @@ class VertexBackend(VLMBackend):
                 error=str(e),
                 metadata={
                     "backend": "vertex",
+                    "model": self.model_name,
+                    "duration": duration,
+                },
+            )
+            logger.error(f"Error in Gemini text query (vertex): {e}")
+            return "I encountered an error processing the request. I'll proceed with a basic action: press 'A' to continue."
                     "model": self.model_name,
                     "duration": duration,
                 },
