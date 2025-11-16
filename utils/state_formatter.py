@@ -538,7 +538,18 @@ def format_state_for_debug(state_data):
     
     debug_parts.append("=" * 60)
     return "\n".join(debug_parts)
+    # Use perception scene type if available for consistency with agent logic
+    raw_state = game_data['game_state']
+    display_state = raw_state
 
+    # If perception classified as MAP but raw state says dialog, use 'overworld' instead
+    perception_scene = game_data.get('_perception_scene_type', '').upper()
+    if perception_scene == 'MAP' and raw_state == 'dialog':
+        display_state = 'overworld'
+    elif perception_scene == 'DIALOGUE' and raw_state == 'overworld':
+        display_state = 'dialog'
+
+    context_parts.append(f"Game State: {display_state}")
 # Helper functions for state formatting
 
 def _get_player_position(player_data):
@@ -1120,7 +1131,24 @@ def _format_game_state(game_data, state_data=None):
     if player_location == 'TITLE_SEQUENCE':
         context_parts.append(f"Game State: title")
     elif 'game_state' in game_data:
-        context_parts.append(f"Game State: {game_data['game_state']}")
+        # Use perception scene type if available for consistency with agent logic
+        raw_state = game_data['game_state']
+        display_state = raw_state
+        
+        # If perception classified as MAP but raw state says dialog, use 'overworld' instead
+        perception_scene = game_data.get('_perception_scene_type', '').upper()
+        
+        # DEBUG: Log what we're seeing
+        if perception_scene:
+            print(f"[STATE_FMT] perception_scene={perception_scene}, raw_state={raw_state}")
+        
+        if perception_scene == 'MAP' and raw_state == 'dialog':
+            display_state = 'overworld'
+            print(f"[STATE_FMT] Override: dialog -> overworld")
+        elif perception_scene == 'DIALOGUE' and raw_state == 'overworld':
+            display_state = 'dialog'
+        
+        context_parts.append(f"Game State: {display_state}")
     
     # Get player data from state_data if provided
     player_data = state_data.get('player', {}) if state_data else {}

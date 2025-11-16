@@ -173,6 +173,7 @@ def run_multiprocess_client(server_port=8000, args=None):
                                         'player': state_data.get('player', {}),
                                         'game': state_data.get('game', {}),
                                         'map': state_data.get('map', {}),
+                                        'state': state_data,  # Include full state for perception/planning
                                         'milestones': state_data.get('milestones', {}),
                                         'visual': state_data.get('visual', {}),
                                         'step_number': state_data.get('step_number', 0),
@@ -334,6 +335,7 @@ def run_multiprocess_client(server_port=8000, args=None):
                                             'player': state_data.get('player', {}),
                                             'game': state_data.get('game', {}),
                                             'map': state_data.get('map', {}),
+                                            'state': state_data,  # Include full state for perception/planning
                                             'milestones': state_data.get('milestones', {}),
                                             'visual': state_data.get('visual', {}),
                                             'step_number': state_data.get('step_number', 0),

@@ -277,7 +277,7 @@ class OpenRouterBackend(VLMBackend):
 class LocalHuggingFaceBackend(VLMBackend):
     """Local HuggingFace transformers backend with bitsandbytes optimization"""
     
-    def __init__(self, model_name: str, device: str = "auto", load_in_4bit: bool = False, **kwargs):
+    def __init__(self, model_name: str, device: str = "auto", load_in_4bit: bool = True, **kwargs):
         try:
             import torch
             from transformers import AutoProcessor, AutoModelForImageTextToText, BitsAndBytesConfig
@@ -296,11 +296,12 @@ class LocalHuggingFaceBackend(VLMBackend):
         if load_in_4bit:
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_compute_dtype=torch.bfloat16,
                 bnb_4bit_use_double_quant=True,
                 bnb_4bit_quant_type="nf4"
             )
             logger.info("Using 4-bit quantization with bitsandbytes")
+            print(f"⚙️  Loading {model_name} in 4-bit quantized mode...")
         
         # Load processor and model
         try:
@@ -309,7 +310,7 @@ class LocalHuggingFaceBackend(VLMBackend):
                 model_name,
                 quantization_config=quantization_config,
                 device_map=device if device != "auto" else "auto",
-                torch_dtype=torch.float16 if not load_in_4bit else None,
+                torch_dtype=torch.bfloat16 if not load_in_4bit else None,
                 trust_remote_code=True
             )
             
@@ -350,9 +351,9 @@ class LocalHuggingFaceBackend(VLMBackend):
                 
                 generated_ids = self.model.generate(
                     **inputs_on_device,
-                    max_new_tokens=1024,
-                    do_sample=True,
-                    temperature=0.7,
+                    max_new_tokens=128,
+                    do_sample=False,
+                    temperature=0.3,
                     pad_token_id=self.processor.tokenizer.eos_token_id
                 )
                 
@@ -401,16 +402,44 @@ class LocalHuggingFaceBackend(VLMBackend):
         return self._generate_response(inputs, text, module_name)
     
     def get_text_query(self, text: str, module_name: str = "Unknown") -> str:
-        """Process a text-only prompt using local HuggingFace model"""
-        # For text-only queries, use simple text format without image
+        """
+        Process a text-only prompt.
+        Uses text-only model if available, otherwise falls back to multimodal with blank image.
+        """
+        from PIL import Image
+        import numpy as np
+
+        if getattr(self, "text_backend_ready", False):
+            # Use text-only generation path
+            inputs = self.text_tokenizer(text, return_tensors="pt").to(self.text_model.device)
+            with self.torch.inference_mode():
+                outputs = self.text_model.generate(
+                    **inputs,
+                    max_new_tokens=256,
+                    temperature=0.3,
+                    do_sample=False,
+                    pad_token_id=self.text_tokenizer.eos_token_id,
+                )
+            result = self.text_tokenizer.decode(outputs[0], skip_special_tokens=True)
+            return result.strip()
+
+        # ---------- fallback to multimodal ----------
+        # Create dummy image to keep multimodal pipeline functional
+        blank = Image.fromarray(np.zeros((32, 32, 3), dtype=np.uint8))
         messages = [
-            {"role": "user", "content": text}
+            {"role": "user",
+             "content": [
+                 {"type": "image", "image": blank},
+                 {"type": "text", "text": text}
+             ]}
         ]
-        formatted_text = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True)
-        inputs = self.processor(text=formatted_text, return_tensors="pt")
-        
+        formatted = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = self.processor(text=formatted, images=blank, return_tensors="pt")
         return self._generate_response(inputs, text, module_name)
+
+    
 
 class LegacyOllamaBackend(VLMBackend):
     """Legacy Ollama backend for backward compatibility"""
@@ -506,7 +535,7 @@ class VertexBackend(VLMBackend):
         # Initialize the model
         self.client = genai.Client(
             vertexai=True,
-            project='pokeagent-011',
+            project='pokeagent-010',
             location='us-central1',
         )
         self.genai = genai
@@ -533,79 +562,122 @@ class VertexBackend(VLMBackend):
         return response
     
     def get_query(self, img: Union[Image.Image, np.ndarray], text: str, module_name: str = "Unknown") -> str:
-        """Process an image and text prompt using Gemini API"""
+        start = time.time()
         try:
             image = self._prepare_image(img)
-            
-            # Prepare content for Gemini
             content_parts = [text, image]
-            
-            # Log the prompt
+
             prompt_preview = text[:2000] + "..." if len(text) > 2000 else text
-            logger.info(f"[{module_name}] GEMINI VLM IMAGE QUERY:")
+            logger.info(f"[{module_name}] GEMINI VLM IMAGE QUERY (vertex):")
             logger.info(f"[{module_name}] PROMPT: {prompt_preview}")
-            
-            # Generate response
+
             response = self._call_generate_content(content_parts)
-            
-            # Check for safety filter or content policy issues
+
             if hasattr(response, 'candidates') and response.candidates:
                 candidate = response.candidates[0]
                 if hasattr(candidate, 'finish_reason') and candidate.finish_reason == 12:
-                    logger.warning(f"[{module_name}] Gemini safety filter triggered (finish_reason=12). Trying text-only fallback.")
-                    # Fallback to text-only query
-                    return self.get_text_query(text, module_name)
-            
+                    # safety → fallback to text-only
+                    logger.warning(f"[{module_name}] safety triggered, falling back to text-only")
+                    result = self.get_text_query(text, module_name)
+                    return result
             result = response.text
-            
-            # Log the response
+
+            if not isinstance(result, str):
+                result = str(result or "")
+
+            duration = time.time() - start
+            log_llm_interaction(
+                interaction_type=f"vertex_{module_name}",
+                prompt=text,
+                response=result,
+                metadata={"backend": "vertex", "model": self.model_name, "has_image": True},
+                duration=duration,
+                model_info={"backend": "vertex", "model": self.model_name},
+            )
+
             result_preview = result[:1000] + "..." if len(result) > 1000 else result
             logger.info(f"[{module_name}] RESPONSE: {result_preview}")
             logger.info(f"[{module_name}] ---")
-            
             return result
-            
+
         except Exception as e:
-            logger.error(f"Error in Gemini image query: {e}")
-            # Try text-only fallback for any Gemini error
-            try:
-                logger.info(f"[{module_name}] Attempting text-only fallback due to error: {e}")
-                return self.get_text_query(text, module_name)
-            except Exception as fallback_error:
-                logger.error(f"[{module_name}] Text-only fallback also failed: {fallback_error}")
-                raise e
+            duration = time.time() - start
+            log_llm_error(
+                interaction_type=f"vertex_{module_name}",
+                prompt=text,
+                error=str(e),
+                metadata={"backend": "vertex", "model": self.model_name, "has_image": True, "duration": duration},
+            )
+            logger.error(f"Error in Gemini image query (vertex): {e}")
+            # text-only fallback already handled inside get_text_query
+            return "I encountered an error processing the image. I'll proceed with a basic action: press 'A' to continue."
     
     def get_text_query(self, text: str, module_name: str = "Unknown") -> str:
-        """Process a text-only prompt using Gemini API"""
+        """Process a text-only prompt using Gemini API (Vertex) and log to our llm_logger."""
+        start = time.time()
         try:
-            # Log the prompt
+            # Log to normal python logger (kept from your version)
             prompt_preview = text[:2000] + "..." if len(text) > 2000 else text
-            logger.info(f"[{module_name}] GEMINI VLM TEXT QUERY:")
+            logger.info(f"[{module_name}] GEMINI VLM TEXT QUERY (vertex):")
             logger.info(f"[{module_name}] PROMPT: {prompt_preview}")
-            
-            # Generate response
+
+            # Actual Vertex call
             response = self._call_generate_content([text])
-            
-            # Check for safety filter or content policy issues
+
+            # Safety / blocked handling (keep your behavior)
             if hasattr(response, 'candidates') and response.candidates:
                 candidate = response.candidates[0]
                 if hasattr(candidate, 'finish_reason') and candidate.finish_reason == 12:
-                    logger.warning(f"[{module_name}] Gemini safety filter triggered (finish_reason=12). Returning default response.")
-                    return "I cannot analyze this content due to safety restrictions. I'll proceed with a basic action: press 'A' to continue."
-            
-            result = response.text
-            
-            # Log the response
+                    logger.warning(
+                        f"[{module_name}] Gemini safety filter triggered (finish_reason=12). Returning default response."
+                    )
+                    result = "I cannot analyze this content due to safety/policy limitations. I'll proceed with a basic action: press 'A' to continue."
+                else:
+                    result = response.text
+            else:
+                # no candidates, fallback
+                result = response.text if hasattr(response, "text") else ""
+
+            if not isinstance(result, str):
+                # make sure planning's .strip() won't blow up
+                result = str(result or "")
+
+            duration = time.time() - start
+
+            # ✅ THIS is what your JSONL was missing:
+            log_llm_interaction(
+                interaction_type=f"vertex_{module_name}",
+                prompt=text,
+                response=result,
+                metadata={
+                    "backend": "vertex",
+                    "model": self.model_name,
+                },
+                duration=duration,
+                model_info={"backend": "vertex", "model": self.model_name},
+            )
+
+            # Also keep python logger
             result_preview = result[:1000] + "..." if len(result) > 1000 else result
             logger.info(f"[{module_name}] RESPONSE: {result_preview}")
             logger.info(f"[{module_name}] ---")
-            
+
             return result
-            
+
         except Exception as e:
-            logger.error(f"Error in Gemini text query: {e}")
-            # Return a safe default response
-            logger.warning(f"[{module_name}] Returning default response due to error: {e}")
+            duration = time.time() - start
+            # ✅ log to our JSON logger as error too
+            log_llm_error(
+                interaction_type=f"vertex_{module_name}",
+                prompt=text,
+                error=str(e),
+                metadata={
+                    "backend": "vertex",
+                    "model": self.model_name,
+                    "duration": duration,
+                },
+            )
+            logger.error(f"Error in Gemini text query (vertex): {e}")
             return "I encountered an error processing the request. I'll proceed with a basic action: press 'A' to continue."
 
 

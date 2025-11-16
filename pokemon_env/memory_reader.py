@@ -369,7 +369,7 @@ class PokemonEmeraldReader:
             name_bytes = self._read_bytes(save_block_2_ptr, 8)
             decoded_name = self._decode_pokemon_text(name_bytes)
             
-            if decoded_name and len(decoded_name) >= 2:
+            if decoded_name and len(decoded_name) >= 1:
                 logger.info(f"Read player name: '{decoded_name}'")
                 return decoded_name
             
